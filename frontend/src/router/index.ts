@@ -12,6 +12,11 @@ const routes: RouteRecordRaw[] = [
     name: 'Servers',
     component: () => import('../views/Servers.vue'),
   },
+  {
+    path: '/tasks',
+    name: 'Tasks',
+    component: () => import('../views/Tasks.vue'),
+  },
 ];
 
 const router = createRouter({

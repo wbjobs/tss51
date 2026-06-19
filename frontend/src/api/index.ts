@@ -1,5 +1,12 @@
 import axios from 'axios';
-import type { Server, CreateServerDto, UpdateServerDto } from '../types';
+import type {
+  Server,
+  CreateServerDto,
+  UpdateServerDto,
+  Task,
+  CreateTaskDto,
+  UpdateTaskDto,
+} from '../types';
 
 const api = axios.create({
   baseURL: '/api',
@@ -19,6 +26,14 @@ export const sshApi = {
   disconnect: (id: string) => api.delete(`/ssh/disconnect/${id}`),
   connectAll: () => api.post('/ssh/connect-all'),
   disconnectAll: () => api.post('/ssh/disconnect-all'),
+};
+
+export const tasksApi = {
+  getAll: () => api.get<Task[]>('/tasks'),
+  getOne: (id: string) => api.get<Task>(`/tasks/${id}`),
+  create: (data: CreateTaskDto) => api.post<Task>('/tasks', data),
+  update: (id: string, data: UpdateTaskDto) => api.put<Task>(`/tasks/${id}`, data),
+  remove: (id: string) => api.delete(`/tasks/${id}`),
 };
 
 export default api;

@@ -1,11 +1,36 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted, onUnmounted, computed, nextTick } from 'vue';
 import { ElMessage } from 'element-plus';
-import { Setting, Link, Close, Refresh, Delete, Operation, Monitor } from '@element-plus/icons-vue';
+import {
+  Setting,
+  Link,
+  Close,
+  Refresh,
+  Delete,
+  Operation,
+  Monitor,
+  List,
+  VideoPlay,
+  Clock,
+  Files,
+} from '@element-plus/icons-vue';
 import { useRouter } from 'vue-router';
 import { terminalSocket } from '../socket';
 import ServerOutputPanel from '../components/ServerOutputPanel.vue';
-import type { Server, CommandOutput, ServerOutput } from '../types';
+import TaskTimeline from '../components/TaskTimeline.vue';
+import type {
+  Server,
+  CommandOutput,
+  ServerOutput,
+  Task,
+  TimelineItem,
+  TaskStart,
+  TaskComplete,
+  TaskCommandStart,
+  TaskCommandOutput,
+  TaskCommandServerComplete,
+  TaskCommandComplete,
+} from '../types';
 
 const router = useRouter();
 
@@ -14,10 +39,15 @@ const commandHistory = ref<string[]>([]);
 const historyIndex = ref(-1);
 const isExecuting = ref(false);
 const servers = ref<Server[]>([]);
+const tasks = ref<Task[]>([]);
+const activeView = ref<'servers' | 'timeline'>('servers');
 const inputRef = ref<HTMLInputElement | null>(null);
 const commandsContainer = ref<HTMLElement | null>(null);
 
 const serverOutputs = reactive<Map<string, ServerOutput>>(new Map());
+
+const timelineItems = ref<TimelineItem[]>([]);
+const activeTaskId = ref<string | null>(null);
 
 const commandHistoryList = [
   'df -h',
@@ -45,6 +75,40 @@ const connectedCount = computed(() => {
   return servers.value.filter((s) => s.connected).length;
 });
 
+const sortedTasks = computed(() => {
+  return [...tasks.value].sort((a, b) => {
+    const aTime = a.updatedAt ? new Date(a.updatedAt).getTime() : 0;
+    const bTime = b.updatedAt ? new Date(b.updatedAt).getTime() : 0;
+    return bTime - aTime;
+  });
+});
+
+const getStatusTagType = (status?: string) => {
+  switch (status) {
+    case 'success':
+      return 'success';
+    case 'failed':
+      return 'danger';
+    case 'running':
+      return 'primary';
+    default:
+      return 'info';
+  }
+};
+
+const getStatusText = (status?: string) => {
+  switch (status) {
+    case 'success':
+      return '成功';
+    case 'failed':
+      return '失败';
+    case 'running':
+      return '运行中';
+    default:
+      return '未执行';
+  }
+};
+
 const handleServers = (data: Server[]) => {
   servers.value = data;
   updateServerOutputs(data);
@@ -53,6 +117,10 @@ const handleServers = (data: Server[]) => {
 const handleServersUpdate = (data: Server[]) => {
   servers.value = data;
   updateServerOutputs(data);
+};
+
+const handleTasks = (data: Task[]) => {
+  tasks.value = data;
 };
 
 const updateServerOutputs = (serverList: Server[]) => {
@@ -105,16 +173,127 @@ const handleError = (data: { message: string }) => {
   ElMessage.error(data.message);
 };
 
+const handleTaskStart = (data: TaskStart) => {
+  activeTaskId.value = data.taskId;
+  activeView.value = 'timeline';
+  const task = tasks.value.find((t) => t.id === data.taskId);
+  timelineItems.value.push({
+    id: `${data.taskId}-start-${data.timestamp}`,
+    type: 'task-start',
+    timestamp: data.timestamp,
+    taskId: data.taskId,
+    taskName: data.taskName,
+    extra: {
+      totalCommands: data.totalCommands,
+      totalServers: data.totalServers,
+      stopOnError: data.stopOnError,
+    },
+  });
+  ElMessage.success(`任务已开始执行: ${data.taskName}`);
+};
+
+const handleTaskComplete = (data: TaskComplete) => {
+  if (activeTaskId.value === data.taskId) {
+    activeTaskId.value = null;
+  }
+  timelineItems.value.push({
+    id: `${data.taskId}-complete-${data.timestamp}`,
+    type: 'task-complete',
+    timestamp: data.timestamp,
+    taskId: data.taskId,
+    taskName: data.taskName,
+    success: data.success,
+    extra: {
+      totalCommands: data.totalCommands,
+      completedCommands: data.completedCommands,
+      failedCommands: data.failedCommands,
+    },
+  });
+  if (data.success) {
+    ElMessage.success(`任务执行成功: ${data.taskName}`);
+  } else {
+    ElMessage.error(`任务执行失败: ${data.taskName}`);
+  }
+};
+
+const handleTaskCommandStart = (data: TaskCommandStart) => {
+  timelineItems.value.push({
+    id: `${data.taskId}-cmd-start-${data.commandId}-${data.timestamp}`,
+    type: 'command-start',
+    timestamp: data.timestamp,
+    taskId: data.taskId,
+    taskName: data.taskName,
+    commandOrder: data.commandOrder,
+    command: data.command,
+    label: data.label,
+    extra: {
+      totalCommands: data.totalCommands,
+    },
+  });
+};
+
+const handleTaskCommandOutput = (data: TaskCommandOutput) => {
+  const task = tasks.value.find((t) => t.id === data.taskId);
+  timelineItems.value.push({
+    id: `${data.taskId}-cmd-output-${data.commandId}-${data.output.timestamp}-${Math.random()}`,
+    type: 'output',
+    timestamp: data.output.timestamp,
+    taskId: data.taskId,
+    taskName: task?.name || 'Unknown Task',
+    commandOrder: data.commandOrder,
+    output: data.output,
+  });
+
+  if (!serverOutputs.has(data.output.serverId)) {
+    serverOutputs.set(data.output.serverId, {
+      serverId: data.output.serverId,
+      serverName: data.output.serverName,
+      outputs: [],
+      connected: true,
+    });
+  }
+  const serverOut = serverOutputs.get(data.output.serverId)!;
+  serverOut.outputs.push(data.output);
+};
+
+const handleTaskCommandServerComplete = (_data: TaskCommandServerComplete) => {};
+
+const handleTaskCommandComplete = (data: TaskCommandComplete) => {
+  timelineItems.value.push({
+    id: `${data.taskId}-cmd-complete-${data.commandId}-${data.timestamp}`,
+    type: 'command-complete',
+    timestamp: data.timestamp,
+    taskId: data.taskId,
+    taskName: tasks.value.find((t) => t.id === data.taskId)?.name || 'Unknown Task',
+    commandOrder: data.commandOrder,
+    command: data.command,
+    success: data.success,
+    extra: {
+      totalServers: data.totalServers,
+      successServers: data.successServers,
+      failedServers: data.failedServers,
+    },
+  });
+};
+
 onMounted(() => {
   terminalSocket.on('servers', handleServers);
   terminalSocket.on('servers-update', handleServersUpdate);
+  terminalSocket.on('tasks', handleTasks);
   terminalSocket.on('output', handleOutput);
   terminalSocket.on('command-start', handleCommandStart);
   terminalSocket.on('command-complete', handleCommandComplete);
   terminalSocket.on('error', handleError);
+  terminalSocket.on('task-start', handleTaskStart);
+  terminalSocket.on('task-complete', handleTaskComplete);
+  terminalSocket.on('task-command-start', handleTaskCommandStart);
+  terminalSocket.on('task-command-output', handleTaskCommandOutput);
+  terminalSocket.on('task-command-server-complete', handleTaskCommandServerComplete);
+  terminalSocket.on('task-command-complete', handleTaskCommandComplete);
 
   if (terminalSocket.isConnected()) {
     terminalSocket.getServers();
+    terminalSocket.getTasks();
   }
 
   nextTick(() => {
@@ -125,10 +304,17 @@ onMounted(() => {
 onUnmounted(() => {
   terminalSocket.off('servers', handleServers);
   terminalSocket.off('servers-update', handleServersUpdate);
+  terminalSocket.off('tasks', handleTasks);
   terminalSocket.off('output', handleOutput);
   terminalSocket.off('command-start', handleCommandStart);
   terminalSocket.off('command-complete', handleCommandComplete);
   terminalSocket.off('error', handleError);
+  terminalSocket.off('task-start', handleTaskStart);
+  terminalSocket.off('task-complete', handleTaskComplete);
+  terminalSocket.off('task-command-start', handleTaskCommandStart);
+  terminalSocket.off('task-command-output', handleTaskCommandOutput);
+  terminalSocket.off('task-command-server-complete', handleTaskCommandServerComplete);
+  terminalSocket.off('task-command-complete', handleTaskCommandComplete);
 });
 
 const executeCommand = () => {
@@ -185,6 +371,10 @@ const goToServers = () => {
   router.push('/servers');
 };
 
+const goToTasks = () => {
+  router.push('/tasks');
+};
+
 const handleConnectAll = () => {
   terminalSocket.connectAll();
 };
@@ -206,12 +396,28 @@ const clearServerOutput = (serverId: string) => {
   }
 };
 
+const clearTimeline = () => {
+  timelineItems.value = [];
+};
+
 const refreshServers = () => {
   terminalSocket.getServers();
 };
 
 const focusInput = () => {
   inputRef.value?.focus();
+};
+
+const executeTask = (task: Task) => {
+  if (task.commands.length === 0) {
+    ElMessage.warning('该任务没有命令');
+    return;
+  }
+  if (connectedCount.value === 0) {
+    ElMessage.warning('没有已连接的服务器，请先连接至少一台服务器');
+    return;
+  }
+  terminalSocket.executeTask(task.id);
 };
 </script>
 
@@ -238,6 +444,9 @@ const focusInput = () => {
         <el-button :icon="Delete" @click="clearAllOutputs" title="清空所有输出 (Ctrl+L)">
           清屏
         </el-button>
+        <el-button type="warning" :icon="List" @click="goToTasks">
+          任务管理
+        </el-button>
         <el-button type="success" :icon="Setting" @click="goToServers">
           服务器管理
         </el-button>
@@ -246,43 +455,140 @@ const focusInput = () => {
 
     <div class="main-content">
       <div class="sidebar">
-        <div class="sidebar-title">
-          <span>快捷命令</span>
+        <div class="sidebar-section">
+          <div class="sidebar-title">
+            <Operation />
+            <span>快捷命令</span>
+          </div>
+          <div class="quick-commands">
+            <el-button
+              v-for="cmd in commandHistoryList"
+              :key="cmd"
+              size="small"
+              :icon="Operation"
+              @click.stop="useHistoryCommand(cmd)"
+              class="quick-cmd-btn"
+            >
+              {{ cmd }}
+            </el-button>
+          </div>
         </div>
-        <div class="quick-commands">
-          <el-button
-            v-for="cmd in commandHistoryList"
-            :key="cmd"
-            size="small"
-            :icon="Operation"
-            @click.stop="useHistoryCommand(cmd)"
-            class="quick-cmd-btn"
-          >
-            {{ cmd }}
-          </el-button>
+
+        <div class="sidebar-section">
+          <div class="sidebar-title">
+            <List />
+            <span>组合任务</span>
+            <el-button
+              link
+              size="small"
+              :icon="Files"
+              @click.stop="goToTasks"
+              class="tasks-link"
+              title="管理任务"
+            />
+          </div>
+          <div class="task-list" v-if="sortedTasks.length > 0">
+            <div
+              v-for="task in sortedTasks"
+              :key="task.id"
+              class="task-card"
+            >
+              <div class="task-card-header">
+                <span class="task-name" :title="task.name">{{ task.name }}</span>
+                <el-tag
+                  size="small"
+                  :type="getStatusTagType(task.lastExecutionStatus)"
+                >
+                  {{ getStatusText(task.lastExecutionStatus) }}
+                </el-tag>
+              </div>
+              <div class="task-card-meta">
+                <span class="cmd-count">{{ task.commands.length }} 条命令</span>
+                <span v-if="task.stopOnError" class="stop-tag">失败停止</span>
+              </div>
+              <el-button
+                size="small"
+                type="primary"
+                :icon="VideoPlay"
+                @click.stop="executeTask(task)"
+                class="execute-btn"
+              >
+                一键执行
+              </el-button>
+            </div>
+          </div>
+          <div v-else class="no-tasks">
+            <el-icon :size="24" color="#6c7086">
+              <Clock />
+            </el-icon>
+            <span>暂无任务</span>
+            <el-button size="small" type="primary" link @click.stop="goToTasks">
+              去创建
+            </el-button>
+          </div>
         </div>
       </div>
 
-      <div class="output-area" ref="commandsContainer">
-        <ServerOutputPanel
-          v-for="server in sortedServers"
-          :key="server.id"
-          :server-id="server.id"
-          :server-name="server.name"
-          :outputs="serverOutputs.get(server.id)?.outputs || []"
-          :connected="server.connected"
-          @clear="clearServerOutput"
-        />
-
-        <div v-if="servers.length === 0" class="empty-state">
-          <el-icon size="64" color="#6c7086">
+      <div class="center-content">
+        <div class="view-tabs">
+          <div
+            class="view-tab"
+            :class="{ active: activeView === 'servers' }"
+            @click="activeView = 'servers'"
+          >
             <Monitor />
-          </el-icon>
-          <h3>暂无服务器</h3>
-          <p>请先在服务器管理中添加服务器</p>
-          <el-button type="primary" :icon="Setting" @click="goToServers">
-            去添加服务器
-          </el-button>
+            <span>服务器输出</span>
+          </div>
+          <div
+            class="view-tab"
+            :class="{ active: activeView === 'timeline' }"
+            @click="activeView = 'timeline'"
+          >
+            <Clock />
+            <span>任务时间线</span>
+            <el-badge
+              v-if="timelineItems.length > 0"
+              :value="timelineItems.length"
+              class="timeline-badge"
+            />
+          </div>
+        </div>
+
+        <div class="view-content">
+          <div
+            v-show="activeView === 'servers'"
+            class="output-area"
+            ref="commandsContainer"
+          >
+            <ServerOutputPanel
+              v-for="server in sortedServers"
+              :key="server.id"
+              :server-id="server.id"
+              :server-name="server.name"
+              :outputs="serverOutputs.get(server.id)?.outputs || []"
+              :connected="server.connected"
+              @clear="clearServerOutput"
+            />
+
+            <div v-if="servers.length === 0" class="empty-state">
+              <el-icon size="64" color="#6c7086">
+                <Monitor />
+              </el-icon>
+              <h3>暂无服务器</h3>
+              <p>请先在服务器管理中添加服务器</p>
+              <el-button type="primary" :icon="Setting" @click="goToServers">
+                去添加服务器
+              </el-button>
+            </div>
+          </div>
+
+          <div v-show="activeView === 'timeline'" class="timeline-area">
+            <TaskTimeline
+              :items="timelineItems"
+              :active-task-id="activeTaskId"
+              @clear="clearTimeline"
+            />
+          </div>
         </div>
       </div>
     </div>
@@ -363,14 +669,25 @@ const focusInput = () => {
 }
 
 .sidebar {
-  width: 240px;
+  width: 280px;
   background: #181825;
   border-right: 1px solid #313244;
   padding: 16px;
   overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.sidebar-section {
+  display: flex;
+  flex-direction: column;
 }
 
 .sidebar-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-size: 13px;
   font-weight: 600;
   color: #bac2de;
@@ -379,10 +696,19 @@ const focusInput = () => {
   letter-spacing: 0.5px;
 }
 
+.sidebar-title .el-icon {
+  color: #89b4fa;
+}
+
+.tasks-link {
+  margin-left: auto;
+  padding: 0;
+}
+
 .quick-commands {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 
 .quick-cmd-btn {
@@ -390,7 +716,7 @@ const focusInput = () => {
   text-align: left;
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
   font-size: 12px;
-  padding: 8px 12px;
+  padding: 6px 10px;
 }
 
 :deep(.quick-cmd-btn .el-button__content) {
@@ -399,10 +725,139 @@ const focusInput = () => {
   white-space: nowrap;
 }
 
-.output-area {
+.task-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.task-card {
+  background: #1e1e2e;
+  border: 1px solid #313244;
+  border-radius: 6px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: all 0.2s;
+}
+
+.task-card:hover {
+  border-color: #89b4fa;
+  background: #313244;
+}
+
+.task-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.task-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #cdd6f4;
   flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: #6c7086;
+}
+
+.cmd-count {
+  background: rgba(137, 180, 250, 0.15);
+  color: #89b4fa;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+.stop-tag {
+  background: rgba(243, 139, 168, 0.15);
+  color: #f38ba8;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+.execute-btn {
+  font-size: 12px;
+  padding: 4px 12px;
+}
+
+.no-tasks {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 20px;
+  color: #6c7086;
+  font-size: 12px;
+}
+
+.center-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.view-tabs {
+  display: flex;
+  padding: 0 20px;
+  background: #181825;
+  border-bottom: 1px solid #313244;
+  gap: 4px;
+}
+
+.view-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 20px;
+  font-size: 14px;
+  font-weight: 500;
+  color: #6c7086;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: all 0.2s;
+  position: relative;
+}
+
+.view-tab:hover {
+  color: #bac2de;
+}
+
+.view-tab.active {
+  color: #89b4fa;
+  border-bottom-color: #89b4fa;
+}
+
+.timeline-badge {
+  margin-left: 4px;
+}
+
+.view-content {
+  flex: 1;
+  overflow: hidden;
+}
+
+.output-area {
+  height: 100%;
   padding: 20px;
   overflow-y: auto;
+}
+
+.timeline-area {
+  height: 100%;
+  padding: 20px;
 }
 
 .output-area::-webkit-scrollbar {

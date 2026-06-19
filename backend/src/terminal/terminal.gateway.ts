@@ -11,6 +11,16 @@ import { Server, Socket } from 'socket.io';
 import { Logger } from '@nestjs/common';
 import { SshService, CommandOutput, ServerCompleteResult } from '../ssh/ssh.service';
 import { ServersService } from '../servers/servers.service';
+import { TasksService } from '../tasks/tasks.service';
+import {
+  TaskExecutionService,
+  TaskStart,
+  TaskComplete,
+  TaskCommandStart,
+  TaskCommandOutput,
+  TaskCommandServerComplete,
+  TaskCommandComplete,
+} from '../tasks/task-execution.service';
 
 @WebSocketGateway({
   cors: {
@@ -28,6 +38,8 @@ export class TerminalGateway implements OnGatewayConnection, OnGatewayDisconnect
   constructor(
     private sshService: SshService,
     private serversService: ServersService,
+    private tasksService: TasksService,
+    private taskExecutionService: TaskExecutionService,
   ) {}
 
   handleConnection(client: Socket) {
@@ -160,6 +172,61 @@ export class TerminalGateway implements OnGatewayConnection, OnGatewayDisconnect
     this.sshService.disconnectAll();
     this.broadcastConnectionStatus();
     client.emit('disconnect-all-complete');
+  }
+
+  @SubscribeMessage('get-tasks')
+  async handleGetTasks(@ConnectedSocket() client: Socket) {
+    const tasks = await this.tasksService.findAll();
+    client.emit('tasks', tasks);
+  }
+
+  @SubscribeMessage('execute-task')
+  async handleExecuteTask(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { taskId: string },
+  ) {
+    const { taskId } = data;
+
+    if (!taskId) {
+      client.emit('error', { message: 'Task ID is required' });
+      return;
+    }
+
+    if (this.taskExecutionService.isTaskRunning(taskId)) {
+      client.emit('error', { message: 'Task is already running' });
+      return;
+    }
+
+    try {
+      const callbacks = {
+        onTaskStart: (event: TaskStart) => {
+          client.emit('task-start', event);
+        },
+        onTaskComplete: (event: TaskComplete) => {
+          client.emit('task-complete', event);
+        },
+        onCommandStart: (event: TaskCommandStart) => {
+          client.emit('task-command-start', event);
+        },
+        onCommandOutput: (event: TaskCommandOutput) => {
+          client.emit('task-command-output', event);
+        },
+        onCommandServerComplete: (event: TaskCommandServerComplete) => {
+          client.emit('task-command-server-complete', event);
+        },
+        onCommandComplete: (event: TaskCommandComplete) => {
+          client.emit('task-command-complete', event);
+        },
+      };
+
+      await this.taskExecutionService.executeTask(taskId, callbacks);
+    } catch (err) {
+      this.logger.error(`Task execution failed: ${err.message}`);
+      client.emit('error', {
+        message: err.message,
+        timestamp: Date.now(),
+      });
+    }
   }
 
   private async broadcastConnectionStatus() {

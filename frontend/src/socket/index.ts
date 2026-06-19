@@ -20,6 +20,7 @@ class TerminalSocket {
       console.log('WebSocket connected');
       this.reconnectAttempts = 0;
       this.getServers();
+      this.getTasks();
     });
 
     this.socket.on('disconnect', () => {
@@ -75,6 +76,18 @@ class TerminalSocket {
   disconnectAll(): void {
     if (this.socket?.connected) {
       this.socket.emit('disconnect-all');
+    }
+  }
+
+  getTasks(): void {
+    if (this.socket?.connected) {
+      this.socket.emit('get-tasks');
+    }
+  }
+
+  executeTask(taskId: string): void {
+    if (this.socket?.connected) {
+      this.socket.emit('execute-task', { taskId });
     }
   }
 
