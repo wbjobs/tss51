@@ -1,0 +1,13 @@
+{
+  "name": "ssh-cluster-manager",
+  "version": "1.0.0",
+  "description": "SSH 集群管理终端 - 同时在多台 Linux 服务器上执行命令",
+  "scripts": {
+    "install:all": "cd backend && npm install && cd ../frontend && npm install",
+    "dev:backend": "cd backend && npm run start:dev",
+    "dev:frontend": "cd frontend && npm run dev",
+    "build:backend": "cd backend && npm run build",
+    "build:frontend": "cd frontend && npm run build",
+    "build": "npm run build:backend && npm run build:frontend"
+  }
+}
