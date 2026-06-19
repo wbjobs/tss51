@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, nextTick, onMounted, computed } from 'vue';
-import { CaretBottom, CaretRight, CircleCheck, CircleClose, Trash } from '@element-plus/icons-vue';
+import { CaretBottom, CaretRight, CircleCheck, CircleClose, Delete } from '@element-plus/icons-vue';
 import type { CommandOutput } from '../types';
 
 interface Props {

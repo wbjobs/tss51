@@ -9,7 +9,7 @@ import {
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 import { Logger } from '@nestjs/common';
-import { SshService, CommandOutput } from '../ssh/ssh.service';
+import { SshService, CommandOutput, ServerCompleteResult } from '../ssh/ssh.service';
 import { ServersService } from '../servers/servers.service';
 
 @WebSocketGateway({
@@ -75,24 +75,37 @@ export class TerminalGateway implements OnGatewayConnection, OnGatewayDisconnect
       timestamp: Date.now(),
     });
 
+    const totalServers = connectedServers.length;
+    const completedServers = new Set<string>();
+
     const onOutput = (output: CommandOutput) => {
       client.emit('output', output);
     };
 
-    try {
-      await this.sshService.executeCommandOnAll(command, onOutput);
-      
-      client.emit('command-complete', {
+    const onServerComplete = (result: ServerCompleteResult) => {
+      completedServers.add(result.serverId);
+      client.emit('server-complete', {
         commandId,
-        timestamp: Date.now(),
+        ...result,
       });
+
+      if (completedServers.size === totalServers) {
+        client.emit('command-complete', {
+          commandId,
+          timestamp: Date.now(),
+        });
+        this.activeCommands.delete(commandId);
+      }
+    };
+
+    try {
+      this.sshService.executeCommandOnAll(command, onOutput, onServerComplete);
     } catch (err) {
       this.logger.error(`Command execution failed: ${err.message}`);
       client.emit('error', {
         message: err.message,
         timestamp: Date.now(),
       });
-    } finally {
       this.activeCommands.delete(commandId);
     }
   }

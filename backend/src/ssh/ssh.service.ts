@@ -12,6 +12,13 @@ export interface CommandOutput {
   timestamp: number;
 }
 
+export interface ServerCompleteResult {
+  serverId: string;
+  serverName: string;
+  success: boolean;
+  timestamp: number;
+}
+
 export interface SshConnection {
   client: Client;
   server: Server;
@@ -239,20 +246,54 @@ export class SshService implements OnModuleInit {
     });
   }
 
-  async executeCommandOnAll(
+  executeCommandOnAll(
     command: string,
     onOutput: (output: CommandOutput) => void,
-  ): Promise<void> {
+    onServerComplete?: (result: ServerCompleteResult) => void,
+  ): void {
     const connectedServers = this.getConnectedServers();
     
     if (connectedServers.length === 0) {
       return;
     }
 
-    const promises = connectedServers.map((server) =>
-      this.executeCommand(server.id, command, onOutput),
-    );
+    for (const server of connectedServers) {
+      setImmediate(() => {
+        this.executeSingleServer(server.id, command, onOutput, onServerComplete)
+          .catch((err) => {
+            this.logger.error(`Error executing command on ${server.name}: ${err.message}`);
+          });
+      });
+    }
+  }
 
-    await Promise.all(promises);
+  private async executeSingleServer(
+    serverId: string,
+    command: string,
+    onOutput: (output: CommandOutput) => void,
+    onServerComplete?: (result: ServerCompleteResult) => void,
+  ): Promise<void> {
+    try {
+      await this.executeCommand(serverId, command, onOutput);
+      if (onServerComplete) {
+        const server = this.connections.get(serverId)?.server;
+        onServerComplete({
+          serverId,
+          serverName: server?.name || 'Unknown',
+          success: true,
+          timestamp: Date.now(),
+        });
+      }
+    } catch (err) {
+      const server = this.connections.get(serverId)?.server;
+      if (onServerComplete) {
+        onServerComplete({
+          serverId,
+          serverName: server?.name || 'Unknown',
+          success: false,
+          timestamp: Date.now(),
+        });
+      }
+    }
   }
 }
